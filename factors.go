@@ -1,8 +1,10 @@
 package mfa
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -19,6 +21,10 @@ import (
 // EnrollTOTP generates a new (inactive) TOTP secret for a user and returns the
 // otpauth:// provisioning URI (render it as a QR code client-side).
 func (s *Service) EnrollTOTP(userID, issuer string) (secret, uri string, err error) {
+	// Never overwrite an active secret: that silently switched 2FA off.
+	if s.Required(userID) {
+		return "", "", fmt.Errorf("mfa: 2fa already enabled")
+	}
 	key, err := totp.Generate(totp.GenerateOpts{Issuer: orDefault(issuer, "togo"), AccountName: userID})
 	if err != nil {
 		return "", "", err
@@ -27,19 +33,24 @@ func (s *Service) EnrollTOTP(userID, issuer string) (secret, uri string, err err
 	return key.Secret(), key.URL(), nil
 }
 
-// VerifyTOTP checks a code; on the first valid code it activates the secret.
+// VerifyTOTP checks a code against an ACTIVE secret. A pending enrolment is
+// never accepted as a login factor; it only becomes one through ActivateTOTP.
 func (s *Service) VerifyTOTP(userID, code string) bool {
 	t, ok := s.store.GetTOTP(userID)
-	if !ok {
+	if !ok || !t.Activated {
 		return false
 	}
-	if !totp.Validate(code, t.Secret) {
+	return totp.Validate(strings.TrimSpace(code), t.Secret)
+}
+
+// ActivateTOTP confirms a pending enrolment with the first code from the app.
+func (s *Service) ActivateTOTP(userID, code string) bool {
+	t, ok := s.store.GetTOTP(userID)
+	if !ok || t.Activated || !totp.Validate(strings.TrimSpace(code), t.Secret) {
 		return false
 	}
-	if !t.Activated {
-		t.Activated = true
-		s.store.SetTOTP(t)
-	}
+	t.Activated = true
+	s.store.SetTOTP(t)
 	return true
 }
 
@@ -88,7 +99,8 @@ func (s *Service) SendOTP(userID string) (string, error) {
 		return "", fmt.Errorf("mfa: too many OTP requests, try again later")
 	}
 	code := randDigits(6)
-	s.store.SetOTP(OTPCode{UserID: userID, Code: code, Expires: time.Now().Add(s.cfg.OTPTTL)})
+	// Stored hashed; the plaintext only leaves via the delivery event.
+	s.store.SetOTP(OTPCode{UserID: userID, Code: hashCode(code), Expires: time.Now().Add(s.cfg.OTPTTL)})
 	s.store.RecordOTPSend(userID, time.Now())
 	return code, nil
 }
@@ -96,7 +108,8 @@ func (s *Service) SendOTP(userID string) (string, error) {
 // VerifyOTP checks an email OTP (single-use, expiring).
 func (s *Service) VerifyOTP(userID, code string) bool {
 	o, ok := s.store.GetOTP(userID)
-	if !ok || time.Now().After(o.Expires) || o.Code != strings.TrimSpace(code) {
+	if !ok || time.Now().After(o.Expires) ||
+		subtle.ConstantTimeCompare([]byte(o.Code), []byte(hashCode(strings.TrimSpace(code)))) != 1 {
 		return false
 	}
 	s.store.DeleteOTP(userID)
@@ -108,7 +121,7 @@ func (s *Service) VerifyOTP(userID, code string) bool {
 // MagicLinkToken mints a signed login token for a user (reuses the challenge
 // signing with a distinct purpose).
 func (s *Service) MagicLinkToken(userID string) string {
-	c := challenge{UserID: userID, Purpose: "magic", Exp: time.Now().Add(15 * time.Minute).Unix()}
+	c := challenge{UserID: userID, Purpose: "magic", Nonce: randCode(16), Exp: time.Now().Add(15 * time.Minute).Unix()}
 	body, _ := jsonMarshal(c)
 	b := base64.RawURLEncoding.EncodeToString(body)
 	return b + "." + s.sign(b)
@@ -117,7 +130,7 @@ func (s *Service) MagicLinkToken(userID string) string {
 // VerifyMagicLink validates a magic-link token, returning the user id.
 func (s *Service) VerifyMagicLink(token string) (string, error) {
 	parts := strings.SplitN(token, ".", 2)
-	if len(parts) != 2 || parts[1] != s.sign(parts[0]) {
+	if len(parts) != 2 || !hmac.Equal([]byte(parts[1]), []byte(s.sign(parts[0]))) {
 		return "", fmt.Errorf("mfa: invalid magic link")
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(parts[0])
@@ -128,8 +141,12 @@ func (s *Service) VerifyMagicLink(token string) (string, error) {
 	if err := jsonUnmarshal(raw, &c); err != nil {
 		return "", err
 	}
-	if c.Purpose != "magic" || time.Now().Unix() > c.Exp {
+	if c.Purpose != "magic" || time.Now().Unix() > c.Exp || c.Nonce == "" {
 		return "", fmt.Errorf("mfa: magic link invalid or expired")
+	}
+	// Single-use: a forwarded or leaked link works at most once.
+	if !s.store.ConsumeNonce("magic:"+c.Nonce, time.Unix(c.Exp, 0)) {
+		return "", fmt.Errorf("mfa: magic link already used")
 	}
 	return c.UserID, nil
 }

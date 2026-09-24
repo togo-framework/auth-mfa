@@ -62,11 +62,22 @@ func TestTOTPEnrollVerifyDisable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !s.VerifyTOTP("user-1", code) {
-		t.Fatal("valid TOTP code rejected")
+	// A pending enrolment is not a login factor yet.
+	if s.VerifyTOTP("user-1", code) {
+		t.Fatal("a pending secret must not verify as a factor")
+	}
+	if !s.ActivateTOTP("user-1", code) {
+		t.Fatal("valid first code should activate")
 	}
 	if !s.Required("user-1") {
-		t.Error("should be activated after verify")
+		t.Error("should be required after activation")
+	}
+	if !s.VerifyTOTP("user-1", code) {
+		t.Fatal("an active secret should verify")
+	}
+	// Enrolling again must not replace an active secret.
+	if _, _, err := s.EnrollTOTP("user-1", "togo"); err == nil {
+		t.Fatal("re-enrolling over an active secret must fail")
 	}
 	if s.VerifyTOTP("user-1", "000000") {
 		t.Error("wrong code should fail")

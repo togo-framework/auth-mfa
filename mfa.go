@@ -10,7 +10,9 @@
 package mfa
 
 import (
+	"context"
 	"crypto/hmac"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -21,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	authpkg "github.com/togo-framework/auth"
 	"github.com/togo-framework/togo"
 )
 
@@ -33,17 +36,26 @@ type Config struct {
 	LockoutThreshold int
 	LockoutMinutes   int
 	PwMinLen         int
+	// MagicLinkEnabled gates magic-link sign-in (MFA_MAGIC_LINK=true). Off by
+	// default: it is a password replacement and should be a deliberate choice.
+	MagicLinkEnabled bool
 }
 
 func configFromEnv() Config {
 	c := Config{
-		ChallengeSecret:  []byte(env("MFA_CHALLENGE_SECRET", "dev-mfa-secret-change-me")),
+		// v0.1.0 fell back to the public string "dev-mfa-secret-change-me", so
+		// challenges and magic links could be forged wherever it was unset.
+		// Now: required in production, random per process in development.
+		// When the auth plugin is present its own challenge (AUTH_SECRET) is
+		// used instead and this secret only signs magic links.
+		ChallengeSecret:  challengeSecret(),
 		ChallengeTTL:     5 * time.Minute,
 		OTPTTL:           dur("MFA_OTP_TTL", 5*time.Minute),
 		OTPRatePer10Min:  3,
 		LockoutThreshold: atoi("MFA_LOCKOUT_THRESHOLD", 5),
 		LockoutMinutes:   atoi("MFA_LOCKOUT_MINUTES", 15),
 		PwMinLen:         atoi("MFA_PW_MIN_LEN", 12),
+		MagicLinkEnabled: env("MFA_MAGIC_LINK", "") == "true",
 	}
 	return c
 }
@@ -58,7 +70,21 @@ type Service struct {
 
 func init() {
 	togo.RegisterProviderFunc("auth-mfa", togo.PriorityLate+10, func(k *togo.Kernel) error {
+		if production() && os.Getenv("MFA_CHALLENGE_SECRET") == "" {
+			return fmt.Errorf("auth-mfa: MFA_CHALLENGE_SECRET is required in production (>= 32 bytes)")
+		}
 		s := &Service{k: k, cfg: configFromEnv(), store: newMemStore()}
+		// Persist factors in the kernel database. v0.1.0 kept them in memory,
+		// so every enrolment and recovery code vanished on restart.
+		if db, err := k.SQL(context.Background()); err == nil {
+			store, err := newSQLStore(context.Background(), db, k.Dialect().Placeholder)
+			if err != nil {
+				return err
+			}
+			s.store = store
+		}
+		// Make auth's own login enforce this plugin's TOTP.
+		authpkg.RegisterSecondFactor(func(_ context.Context, userID string) bool { return s.Required(userID) })
 		k.Set("mfa", s)
 		if k.Router != nil {
 			s.mountRoutes(k.Router)
@@ -97,6 +123,7 @@ func (s *Service) Required(userID string) bool {
 type challenge struct {
 	UserID  string `json:"uid"`
 	Purpose string `json:"p"`
+	Nonce   string `json:"n,omitempty"`
 	Exp     int64  `json:"exp"`
 }
 
@@ -201,6 +228,20 @@ func (s *Service) ValidatePassword(pw string) error {
 		return fmt.Errorf("password must contain %s", strings.Join(missing, ", "))
 	}
 	return nil
+}
+
+func challengeSecret() []byte {
+	if v := os.Getenv("MFA_CHALLENGE_SECRET"); v != "" {
+		return []byte(v)
+	}
+	b := make([]byte, 32)
+	_, _ = cryptorand.Read(b)
+	return b
+}
+
+func production() bool {
+	e := strings.ToLower(os.Getenv("APP_ENV"))
+	return e == "production" || e == "prod"
 }
 
 // ---- env helpers ----

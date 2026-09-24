@@ -51,6 +51,10 @@ type Store interface {
 
 	GetLockout(userID string) Lockout
 	SetLockout(userID string, l Lockout)
+
+	// ConsumeNonce records a single-use token id; it returns false if the
+	// nonce was already used. until is when the nonce can be forgotten.
+	ConsumeNonce(nonce string, until time.Time) bool
 }
 
 // ---- in-memory store (default) ----
@@ -62,6 +66,7 @@ type memStore struct {
 	otp      map[string]OTPCode
 	otpSends map[string][]time.Time
 	lockout  map[string]Lockout
+	nonces   map[string]time.Time
 }
 
 func newMemStore() *memStore {
@@ -71,6 +76,7 @@ func newMemStore() *memStore {
 		otp:      map[string]OTPCode{},
 		otpSends: map[string][]time.Time{},
 		lockout:  map[string]Lockout{},
+		nonces:   map[string]time.Time{},
 	}
 }
 
@@ -162,4 +168,20 @@ func (m *memStore) SetLockout(userID string, l Lockout) {
 	m.mu.Lock()
 	m.lockout[userID] = l
 	m.mu.Unlock()
+}
+
+func (m *memStore) ConsumeNonce(nonce string, until time.Time) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	for n, exp := range m.nonces {
+		if exp.Before(now) {
+			delete(m.nonces, n)
+		}
+	}
+	if _, used := m.nonces[nonce]; used {
+		return false
+	}
+	m.nonces[nonce] = until
+	return true
 }
