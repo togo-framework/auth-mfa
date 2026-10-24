@@ -31,8 +31,8 @@ github.com/togo-framework/auth v0.9.0 h1:X9otnV4BOvEiSScSkemyx1NWqiXLOmSpHQdmwhE
 github.com/togo-framework/auth v0.9.0/go.mod h1:X2Y+JpQTWBz+zNibDJdElRTtR6oGnhbqZIj4WR7+4+4=
 github.com/togo-framework/orm v0.1.0 h1:ip3QCIMv0VSsUIqAXdrayqJvK+eAyF/DPZy5sZKjNJk=
 github.com/togo-framework/orm v0.1.0/go.mod h1:1Z207HME5xC5PX3NqJjOPRiOTqsgW9q8YrqVCjJCTOc=
-github.com/togo-framework/togo v0.20.1 h1:sygmzwKZ2WBYlxxFk+SaCcZgAKp0LtjA4cHcdcoGR4g=
-github.com/togo-framework/togo v0.20.1/go.mod h1:/ybNefL1VWo0Pod32+YwW7ZgyInyXzOq3jGPBjUJYtc=
+github.com/togo-framework/togo v0.21.1 h1:ssFOTIccLDVdokbegObVM+A9q2SKLjYDCPFoLOTItF0=
+github.com/togo-framework/togo v0.21.1/go.mod h1:/ybNefL1VWo0Pod32+YwW7ZgyInyXzOq3jGPBjUJYtc=
 golang.org/x/crypto v0.27.0 h1:GXm2NjJrPaiv/h1tb2UH8QfgC/hOf/+z0p6PT8o1w7A=
 golang.org/x/crypto v0.27.0/go.mod h1:1Xngt8kV6Dvbssa53Ziq6Eqn0HqbZi5Z6R0ZpwQzt70=
 golang.org/x/mod v0.16.0 h1:QX4fJ0Rr5cPQCF7O9lh9Se4pmwfwskqZfq5moyldzic=
