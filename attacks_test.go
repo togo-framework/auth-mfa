@@ -246,6 +246,34 @@ func TestMagicLinkOffByDefault(t *testing.T) {
 	}
 }
 
+func TestAttackMagicLinkMailFlood(t *testing.T) {
+	e := boot(t, map[string]string{"MFA_MAGIC_LINK": "true"})
+	c := e.client()
+	c.account("flood@example.com")
+
+	sent := 0
+	e.k.Hooks.On(EventMagicLinkRequested, 50, func(_ context.Context, _ any) error {
+		sent++
+		return nil
+	})
+	var first map[string]string
+	for i := 0; i < 10; i++ {
+		var out map[string]string
+		code := c.call(http.MethodPost, "/api/auth/mfa/magic-link/send", map[string]string{"email": "flood@example.com"}, &out)
+		if first == nil {
+			first = out
+		}
+		// Throttled requests answer exactly like the rest, or the limit
+		// itself would reveal that the account exists.
+		if code != http.StatusAccepted || out["status"] != first["status"] {
+			t.Fatalf("request %d: throttling must not change the answer: %d %v", i, code, out)
+		}
+	}
+	if sent != 3 {
+		t.Fatalf("SECURITY: magic-link sends must be rate-limited per account; %d of 10 went out", sent)
+	}
+}
+
 // The legitimate path: password → challenge → TOTP → session with roles.
 func TestTwoFactorLoginEndToEnd(t *testing.T) {
 	e := boot(t, nil)

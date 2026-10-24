@@ -256,8 +256,14 @@ func (s *Service) handleMagicSend(w http.ResponseWriter, r *http.Request) {
 	if err != nil || id == nil {
 		return
 	}
+	// Throttled silently: a different answer would tell the caller the
+	// account exists.
+	token, err := s.RequestMagicLink(id.ID)
+	if err != nil {
+		return
+	}
 	s.fire(r.Context(), EventMagicLinkRequested, map[string]string{
-		"user_id": id.ID, "email": id.Email, "token": s.MagicLinkToken(id.ID),
+		"user_id": id.ID, "email": id.Email, "token": token,
 	})
 }
 

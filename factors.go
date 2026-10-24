@@ -127,6 +127,18 @@ func (s *Service) MagicLinkToken(userID string) string {
 	return b + "." + s.sign(b)
 }
 
+// RequestMagicLink mints a magic link for delivery, rate-limited per user like
+// SendOTP (it shares the send log under a "magic:" key). Without it anyone who
+// knew an address could flood that inbox with sign-in mails.
+func (s *Service) RequestMagicLink(userID string) (string, error) {
+	key := "magic:" + userID
+	if s.store.OTPSendsSince(key, time.Now().Add(-10*time.Minute)) >= s.cfg.OTPRatePer10Min {
+		return "", fmt.Errorf("mfa: too many magic-link requests, try again later")
+	}
+	s.store.RecordOTPSend(key, time.Now())
+	return s.MagicLinkToken(userID), nil
+}
+
 // VerifyMagicLink validates a magic-link token, returning the user id.
 func (s *Service) VerifyMagicLink(token string) (string, error) {
 	parts := strings.SplitN(token, ".", 2)
